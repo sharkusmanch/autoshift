@@ -46,7 +46,7 @@ def redeem(key: Key):
     import query
     """Redeem key and set as redeemed if successfull"""
 
-    _L.info(f"Trying to redeem {key.reward} ({key.code})")
+    _L.info(f"Trying to redeem {key.reward} ({key.code}) on platform {key.platform}")
     status = client.redeem(key.code, known_games[key.game], key.platform)
     _L.debug(f"Status: {status}")
 
@@ -62,6 +62,21 @@ def redeem(key: Key):
     except:
         _L.info("  " + status.msg)
 
+    # Send notification on success
+    if status == Status.SUCCESS:
+        import os
+        apprise_url = os.environ.get("APPRISE_URL")
+        if apprise_url:
+            try:
+                from apprise import Apprise
+                a = Apprise()
+                a.add(apprise_url)
+                a.notify(
+                    body=f"Redeemed {key.reward} ({key.code}) on {key.platform}",
+                    title=f"SHiFT Key Redeemed: {key.reward}"
+                )
+            except Exception as e:
+                _L.warn(f"Failed to send Apprise notification: {e}")
     return status == Status.SUCCESS
 
 
@@ -84,23 +99,22 @@ def query_keys(games: list[str], platforms: list[str]):
 
     _g = lambda key: key.game
     _p = lambda key: key.platform
+    # Use all known platforms except 'universal' by default
+    all_platforms = [p for p in known_platforms if p != "universal"]
+
     for g, g_keys in groupby(sorted(new_keys, key=_g), _g):
         if g not in games:
             continue
-        all_keys[g] = {p: [] for p in platforms}
+        all_keys[g] = {p: [] for p in all_platforms}
         for platform, p_keys in groupby(sorted(g_keys, key=_p), _p):
-            if platform not in platforms and platform != "universal":
-                continue
-
-            _ps = [platform]
+            # Always distribute keys to all platforms (except 'universal')
             if platform == "universal":
-                _ps = platforms.copy()
+                for p in all_platforms:
+                    all_keys[g][p].extend(key.copy().set(platform=p) for key in p_keys)
+            elif platform in all_platforms:
+                all_keys[g][platform].extend(p_keys)
 
-            for p in _ps:
-                all_keys[g][p].extend(key.copy().set(platform=p) for key in p_keys)
-                # all_keys[g][p] = list(p_keys)
-
-        for p in platforms:
+        for p in all_platforms:
             # count the new keys
             n_golden = sum(int(cast(Match[str], m).group(1) or 1)
                             for m in
@@ -138,13 +152,13 @@ def setup_argparser():
                         action="store_true",
                         help="Only redeem non-golden keys")
     parser.add_argument("--games",
-                        type=str, required=True,
+                        type=str, required=False,
                         choices=games, nargs="+",
-                        help=("Games you want to query SHiFT keys for"))
+                        help=("Games you want to query SHiFT keys for. If omitted, all games will be used."))
     parser.add_argument("--platforms",
-                        type=str, required=True,
+                        type=str, required=False,
                         choices=platforms, nargs="+",
-                        help=("Platforms you want to query SHiFT keys for"))
+                        help=("Platforms you want to query SHiFT keys for. If omitted, all platforms will be used."))
     parser.add_argument("--limit",
                         type=int, default=200,
                         help=textwrap.dedent("""\
@@ -168,61 +182,118 @@ def main(args):
     import query
     from query import db, r_golden_keys
 
-    with db:
-        if not client:
-            client = ShiftClient(args.user, args.pw)
+    import os
+    apprise_url = os.environ.get("APPRISE_URL")
+    summary = {
+        "redeemed": 0,
+        "failed": 0,
+        "games": set(),
+        "platforms": set(),
+        "errors": []
+    }
+    try:
+        with db:
+            if not client:
+                client = ShiftClient(args.user, args.pw)
 
-        # query all keys
-        all_keys = query_keys(args.games, args.platforms)
+            # Use all games/platforms if not specified
+            games = args.games if args.games else list(known_games.keys())
+            plats = args.platforms if args.platforms else [p for p in known_platforms if p != "universal"]
 
-        # redeem 0 golden keys but only golden??... duh
-        if not args.limit and args.golden:
-            _L.info("Not redeeming anything ...")
-            return
+            all_keys = query_keys(games, plats)
 
-        _L.info("Trying to redeem now.")
+            # redeem 0 golden keys but only golden??... duh
+            if not args.limit and args.golden:
+                _L.info("Not redeeming anything ...")
+                return
 
-        # now redeem
-        for game in all_keys.keys():
-            for platform in all_keys[game].keys():
-                t_keys = list(filter(lambda key: not key.redeemed, all_keys[game][platform]))
-                for num, key in enumerate(t_keys):
+            _L.info("Trying to redeem now.")
 
-                    if (num and not (num % 15)) or client.last_status == Status.SLOWDOWN:
-                        if client.last_status == Status.SLOWDOWN:
-                            _L.info("Slowing down a bit..")
+            # now redeem
+            for game in all_keys.keys():
+                for platform in all_keys[game].keys():
+                    t_keys = list(filter(lambda key: not key.redeemed, all_keys[game][platform]))
+                    for num, key in enumerate(t_keys):
+
+                        if (num and not (num % 15)) or client.last_status == Status.SLOWDOWN:
+                            if client.last_status == Status.SLOWDOWN:
+                                _L.info("Slowing down a bit..")
+                            else:
+                                _L.info("Trying to prevent a 'too many requests'-block.")
+                            sleep(60)
+
+                        _L.info(f"Key #{num+1}/{len(t_keys)}")
+                        num_g_keys = 0  # number of golden keys in this code
+                        m = r_golden_keys.match(key.reward)
+
+                        # skip keys we don't want
+                        if ((args.golden and not m) or (args.non_golden and m)):
+                            continue
+
+                        if m:
+                            num_g_keys = int(m.group(1) or 1)
+                            # skip golden keys if we reached the limit
+                            if args.limit <= 0:
+                                continue
+
+                            # skip if this code has too many golden keys
+                            if (args.limit - num_g_keys) < 0:
+                                continue
+
+                        try:
+                            redeemed = redeem(key)
+                        except Exception as e:
+                            summary["failed"] += 1
+                            summary["errors"].append(f"{key.code} ({key.platform}): {e}")
+                            continue
+                        if redeemed:
+                            args.limit -= num_g_keys
+                            summary["redeemed"] += 1
+                            summary["games"].add(game)
+                            summary["platforms"].add(platform)
+                            _L.info(f"Redeeming another {args.limit} Keys")
                         else:
-                            _L.info("Trying to prevent a 'too many requests'-block.")
-                        sleep(60)
+                            summary["failed"] += 1
+                            # don't spam if we reached the hourly limit
+                            if client.last_status == Status.TRYLATER:
+                                if apprise_url:
+                                    try:
+                                        from apprise import Apprise
+                                        a = Apprise()
+                                        a.add(apprise_url)
+                                        a.notify(
+                                            body="Redemption stopped: SHiFT hourly limit reached.",
+                                            title="SHiFT Redemption: Try Later"
+                                        )
+                                    except Exception as e:
+                                        _L.warn(f"Failed to send Apprise notification: {e}")
+                                return
 
-                    _L.info(f"Key #{num+1}/{len(t_keys)}")
-                    num_g_keys = 0  # number of golden keys in this code
-                    m = r_golden_keys.match(key.reward)
-
-                    # skip keys we don't want
-                    if ((args.golden and not m) or (args.non_golden and m)):
-                        continue
-
-                    if m:
-                        num_g_keys = int(m.group(1) or 1)
-                        # skip golden keys if we reached the limit
-                        if args.limit <= 0:
-                            continue
-
-                        # skip if this code has too many golden keys
-                        if (args.limit - num_g_keys) < 0:
-                            continue
-
-                    redeemed = redeem(key)
-                    if redeemed:
-                        args.limit -= num_g_keys
-                        _L.info(f"Redeeming another {args.limit} Keys")
-                    else:
-                        # don't spam if we reached the hourly limit
-                        if client.last_status == Status.TRYLATER:
-                            return
-
-        _L.info("No more keys left!")
+            _L.info("No more keys left!")
+    except Exception as e:
+        summary["errors"].append(str(e))
+        summary["failed"] += 1
+        _L.warn(f"Redemption process failed: {e}")
+    finally:
+        if apprise_url:
+            try:
+                from apprise import Apprise
+                a = Apprise()
+                a.add(apprise_url)
+                body = (
+                    f"Redeemed: {summary['redeemed']}\n"
+                    f"Failed: {summary['failed']}\n"
+                    f"Games: {', '.join(summary['games']) if summary['games'] else 'None'}\n"
+                    f"Platforms: {', '.join(summary['platforms']) if summary['platforms'] else 'None'}\n"
+                )
+                if summary["errors"]:
+                    body += "Errors:\n" + "\n".join(summary["errors"])
+                a.notify(
+                    body=body,
+                    title="SHiFT Redemption Summary"
+                )
+            except Exception as e:
+                _L.warn(f"Failed to send Apprise notification: {e}")
 
 
 if __name__ == "__main__":
@@ -232,11 +303,45 @@ if __name__ == "__main__":
     if not os.path.exists(os.path.join(DIRNAME, "data", ".cookies.save")):
         print(LICENSE_TEXT)
 
+
     # build argument parser
     parser = setup_argparser()
     args = parser.parse_args()
 
-    args.pw = getattr(args, "pass")
+
+    # Support reading all parameters from environment variables if not provided
+    import os
+    if not args.user:
+        args.user = os.environ.get("SHIFT_USER")
+    args.pw = getattr(args, "pass") or os.environ.get("SHIFT_PASS")
+    if not args.games:
+        env_games = os.environ.get("SHIFT_GAMES")
+        if env_games:
+            args.games = env_games.split()
+    if not args.platforms:
+        env_platforms = os.environ.get("SHIFT_PLATFORMS")
+        if env_platforms:
+            args.platforms = env_platforms.split()
+    if not args.golden:
+        args.golden = bool(os.environ.get("SHIFT_GOLDEN"))
+    if not args.non_golden:
+        args.non_golden = bool(os.environ.get("SHIFT_NON_GOLDEN"))
+    if args.limit == 200:  # only override if default
+        env_limit = os.environ.get("SHIFT_LIMIT")
+        if env_limit:
+            try:
+                args.limit = int(env_limit)
+            except ValueError:
+                pass
+    if not args.schedule:
+        env_schedule = os.environ.get("SHIFT_SCHEDULE")
+        if env_schedule:
+            try:
+                args.schedule = float(env_schedule)
+            except ValueError:
+                pass
+    if not args.verbose:
+        args.verbose = bool(os.environ.get("SHIFT_VERBOSE"))
 
     _L.setLevel(INFO)
     if args.verbose:

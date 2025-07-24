@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  autoshift:
+    build:
+      context: .
+      dockerfile: dockerfile
+    environment:
+      SHIFT_USER: ${SHIFT_USER}
+      SHIFT_PASS: ${SHIFT_PASS}
+      TZ: ${TZ:-America/Chicago}
+    volumes:
+      - ./data:/autoshift/data
+    restart: unless-stopped

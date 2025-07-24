@@ -1,0 +1,50 @@
+name: AutoSHIFt Redeem Codes
+
+on:
+  schedule:
+    # 10am and 10pm Pacific Time (PST/PDT)
+    - cron: '0 17,5 * * *'
+  workflow_dispatch:
+
+jobs:
+  redeem:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache database
+        uses: actions/cache@v4
+        with:
+          path: data/keys.db
+          key: autoshift-db-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            autoshift-db-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run AutoSHIFt
+        env:
+          SHIFT_USER: ${{ secrets.AUTOSHIFT_USER }}
+          SHIFT_PASS: ${{ secrets.AUTOSHIFT_PASS }}
+          APPRISE_URL: ${{ secrets.APPRISE_URL }}
+        run: |
+          mkdir -p data
+          # Restore cached DB if present
+          if [ -f ${{ runner.temp }}/data/keys.db ]; then
+            cp ${{ runner.temp }}/data/keys.db data/keys.db
+          fi
+          python auto.py
+          # Save DB after run
+          if [ -f data/keys.db ]; then
+            mkdir -p ${{ runner.temp }}/data
+            cp data/keys.db ${{ runner.temp }}/data/keys.db
+          fi

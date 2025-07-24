@@ -357,61 +357,29 @@ def progn(*args: _VT) -> _VT:
     *_, lastArg = args
     return lastArg
 
-def parse_shift_orcicorn():
-    import json
-    key_url = "https://shift.orcicorn.com/shift-code/index.json"
 
+# --- Reddit backend as default ---
+def parse_shift_reddit():
+    import reddit
+    keys = []
+    # get_valid_codes_with_expirations returns (code, expiration_date) tuples
+    for code, exp_date in reddit.get_valid_codes_with_expirations():
+        # Try to infer game/platform from code (if possible), else set as unknown
+        # This is a placeholder; you may want to improve this logic
+        key = Key(code=code, reward="Reddit code", game="bl3", platform="universal", expires=exp_date)
+        keys.append(key)
+    return keys
 
-    resp = requests.get(key_url)
-    if not resp:
-        _L.error(f"Error querying for new keys: {resp.reason}")
-        return None
-
-    data: dict = json.loads(resp.text)[0]
-
-    if "codes" not in data:
-        _L.error("Invalid response. Please contact the developer @ github.com/fabbi")
-        return None
-
-
-    if parse_shift_orcicorn.first_parse:
-        parse_shift_orcicorn.first_parse = False
-        print_banner(data)
-
-
-    for code_data in data["codes"]:
-        keys: Iterable[Key]= [Key(**code_data)]
-
-        # 1. special_key_handler
-        # 2. known platform
-        # 3. shorten game
-        keys = list(
-            flatten(map(lambda key: special_key_handler[key.game](key)
-                               if key.game in special_key_handler
-                               else [key]
-                        , keys)))
-
-        for key in keys:
-            key.set(game=get_short_game_key(key.game))
-            key.set(platform=get_short_platform_key(key.platform))
-
-        yield from keys
-
-parse_shift_orcicorn.first_parse = True
 
 
 def update_keys():
     from collections import Counter
-    if not parse_shift_orcicorn.first_parse:
-        _L.info("Checking for new keys!")
-
-    keys = list(parse_shift_orcicorn())
+    _L.info("Checking Reddit for new keys!")
+    keys = parse_shift_reddit()
     new_keys = [db.insert(key) for key in keys]
-
     counts = Counter(key.game for key in new_keys if key)
     for game, count in sorted(counts.items()):
-        _L.info(f"Got {count} new keys for {known_games[game]}")
-
+        _L.info(f"Got {count} new keys for {known_games.get(game, game)}")
     return keys
 
 
