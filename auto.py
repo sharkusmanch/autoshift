@@ -79,7 +79,7 @@ def query_keys(games: list[str], platforms: list[str]):
     _g = lambda key: key.game
     _p = lambda key: key.platform
     # Use all known platforms except 'universal' by default
-    all_platforms = [p for p in known_platforms if p != "universal"]
+    all_platforms = [p for p in known_platforms if p != "universal" and p != "stadia"]
 
     for g, g_keys in groupby(sorted(new_keys, key=_g), _g):
         if g not in games:
@@ -111,7 +111,7 @@ def setup_argparser():
     import argparse
     import textwrap
     games = list(known_games.keys())
-    platforms = list(known_platforms.without("universal").keys())
+    platforms = [p for p in known_platforms.without("universal").keys() if p != "stadia"]
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter)
@@ -177,7 +177,7 @@ def main(args):
 
             # Use all games/platforms if not specified
             games = args.games if args.games else list(known_games.keys())
-            plats = args.platforms if args.platforms else [p for p in known_platforms if p != "universal"]
+            plats = args.platforms if args.platforms else [p for p in known_platforms if p != "universal" and p != "stadia"]
 
             all_keys = query_keys(games, plats)
 
