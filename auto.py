@@ -209,66 +209,74 @@ def main(args):
 
             _L.info("Trying to redeem now.")
 
-            # now redeem
-            for game in all_keys.keys():
-                for platform in all_keys[game].keys():
-                    t_keys = list(filter(lambda key: not key.redeemed, all_keys[game][platform]))
-                    for num, key in enumerate(t_keys):
-
-                        if (num and not (num % 15)) or client.last_status == Status.SLOWDOWN:
-                            if client.last_status == Status.SLOWDOWN:
-                                _L.info("Slowing down a bit..")
-                            else:
-                                _L.info("Trying to prevent a 'too many requests'-block.")
-                            sleep(60)
-
-                        _L.info(f"Key #{num+1}/{len(t_keys)}")
-                        num_g_keys = 0  # number of golden keys in this code
+            # always try all codes for all games/platforms unless user specified
+            for code in set(key.code for g in all_keys for p in all_keys[g] for key in all_keys[g][p]):
+                for game in games:
+                    for platform in plats:
+                        # find key for this code/game/platform
+                        key = None
+                        for g in all_keys:
+                            for p in all_keys[g]:
+                                for k in all_keys[g][p]:
+                                    if k.code == code and k.game == game and k.platform == platform:
+                                        key = k
+                                        break
+                                if key:
+                                    break
+                            if key:
+                                break
+                        if not key:
+                            # create a new Key object for this permutation
+                            key = Key(code=code, game=game, platform=platform, reward="Reddit code")
+                        if key.redeemed:
+                            continue
+                        num_g_keys = 0
                         m = r_golden_keys.match(key.reward)
-
                         # skip keys we don't want
                         if ((args.golden and not m) or (args.non_golden and m)):
                             continue
-
                         if m:
                             num_g_keys = int(m.group(1) or 1)
-                            # skip golden keys if we reached the limit
                             if args.limit <= 0:
                                 continue
-
-                            # skip if this code has too many golden keys
                             if (args.limit - num_g_keys) < 0:
                                 continue
-
-                        try:
-                            redeemed = redeem(key)
-                        except Exception as e:
-                            summary["failed"] += 1
-                            summary["errors"].append(f"{key.code} ({key.platform}): {e}")
-                            continue
-                        if redeemed:
-                            args.limit -= num_g_keys
-                            summary["redeemed"] += 1
-                            summary["games"].add(game)
-                            summary["platforms"].add(platform)
-                            _L.info(f"Redeeming another {args.limit} Keys")
-                        else:
-                            summary["failed"] += 1
-                            # don't spam if we reached the hourly limit
-                            if client.last_status == Status.TRYLATER:
-                                if apprise_url:
-                                    try:
-                                        from apprise import Apprise
-                                        a = Apprise()
-                                        a.add(apprise_url)
-                                        a.notify(
-                                            body="Redemption stopped: SHiFT hourly limit reached.",
-                                            title="SHiFT Redemption: Try Later"
-                                        )
-                                    except Exception as e:
-                                        _L.warn(f"Failed to send Apprise notification: {e}")
-                                return
-
+                        sleep_time = 60
+                        max_sleep = 300
+                        while True:
+                            try:
+                                redeemed = redeem(key)
+                            except Exception as e:
+                                summary["failed"] += 1
+                                summary["errors"].append(f"{key.code} ({key.platform}): {e}")
+                                break
+                            if client.last_status == Status.SLOWDOWN:
+                                _L.info(f"Too many requests. Sleeping for {sleep_time} seconds and retrying...")
+                                sleep(sleep_time)
+                                sleep_time = min(sleep_time * 2, max_sleep)
+                                continue
+                            if redeemed:
+                                args.limit -= num_g_keys
+                                summary["redeemed"] += 1
+                                summary["games"].add(game)
+                                summary["platforms"].add(platform)
+                                _L.info(f"Redeeming another {args.limit} Keys")
+                            else:
+                                summary["failed"] += 1
+                                if client.last_status == Status.TRYLATER:
+                                    if apprise_url:
+                                        try:
+                                            from apprise import Apprise
+                                            a = Apprise()
+                                            a.add(apprise_url)
+                                            a.notify(
+                                                body="Redemption stopped: SHiFT hourly limit reached.",
+                                                title="SHiFT Redemption: Try Later"
+                                            )
+                                        except Exception as e:
+                                            _L.warn(f"Failed to send Apprise notification: {e}")
+                                    break
+                            break
             _L.info("No more keys left!")
     except Exception as e:
         summary["errors"].append(str(e))
