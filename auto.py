@@ -25,7 +25,7 @@ def redeem(key: Key):
     import query
     """Redeem key and set as redeemed if successfull"""
 
-    _L.info(f"Trying to redeem {key.reward} ({key.code}) on platform {key.platform}")
+    _L.info(f"Trying to redeem {key.reward} ({key.code}) for game {key.game} on platform {key.platform}")
     status = client.redeem(key.code, known_games[key.game], key.platform)
     _L.debug(f"Status: {status}")
 
@@ -41,21 +41,7 @@ def redeem(key: Key):
     except:
         _L.info("  " + status.msg)
 
-    # Send notification on success
-    if status == Status.SUCCESS:
-        import os
-        apprise_url = os.environ.get("APPRISE_URL")
-        if apprise_url:
-            try:
-                from apprise import Apprise
-                a = Apprise()
-                a.add(apprise_url)
-                a.notify(
-                    body=f"Redeemed {key.reward} ({key.code}) on {key.platform}",
-                    title=f"SHiFT Key Redeemed: {key.reward}"
-                )
-            except Exception as e:
-                _L.warn(f"Failed to send Apprise notification: {e}")
+    # No per-redemption notification; summary sent after all redemptions
     return status == Status.SUCCESS
 
 
@@ -168,6 +154,7 @@ def main(args):
         "failed": 0,
         "games": set(),
         "platforms": set(),
+        "codes": [],
         "errors": []
     }
     try:
@@ -239,6 +226,7 @@ def main(args):
                                 summary["redeemed"] += 1
                                 summary["games"].add(game)
                                 summary["platforms"].add(platform)
+                                summary["codes"].append(f"{key.code} ({key.reward}) for {game} on {platform}")
                                 _L.info(f"Redeeming another {args.limit} Keys")
                             else:
                                 summary["failed"] += 1
@@ -268,13 +256,16 @@ def main(args):
                 a = Apprise()
                 a.add(apprise_url)
                 body = (
+                    f"Redemption Summary:\n"
                     f"Redeemed: {summary['redeemed']}\n"
                     f"Failed: {summary['failed']}\n"
                     f"Games: {', '.join(summary['games']) if summary['games'] else 'None'}\n"
                     f"Platforms: {', '.join(summary['platforms']) if summary['platforms'] else 'None'}\n"
                 )
+                if summary["codes"]:
+                    body += "\nRedeemed Codes:\n" + "\n".join(summary["codes"])
                 if summary["errors"]:
-                    body += "Errors:\n" + "\n".join(summary["errors"])
+                    body += "\nErrors:\n" + "\n".join(summary["errors"])
                 a.notify(
                     body=body,
                     title="SHiFT Redemption Summary"
