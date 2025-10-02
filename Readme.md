@@ -3,7 +3,7 @@
 - **Compatibility:** 3.9+.
 - **Platform:** Crossplatform.
 - **Version:** 1.1.0
-- **Repo:** https://github.com/Fabbi/autoshift
+- **Repo:** https://github.com/sharkusmanch/autoshift
 
 # Overview
 
@@ -22,7 +22,7 @@ You can choose to only redeem mods/skins etc, only golden keys or both. There is
 ## Installation
 
 ```sh
-git clone git@github.com:Fabbi/autoshift.git
+git clone git@github.com:sharkusmanch/autoshift.git
 ```
 
 or download it as zip
@@ -115,7 +115,7 @@ docker run \
   -e SHIFT_ARGS='--schedule -v' \
   -e TZ='America/Chicago' \
   -v autoshift:/autoshift/data \
-  fabianschweinfurth/autoshift:latest
+  ghcr.io/sharkusmanch/autoshift:latest
 ```
 
 Compose:
@@ -125,7 +125,7 @@ Compose:
 version: "3.0"
 services:
   autoshift:
-    image: fabianschweinfurth/autoshift:latest
+    image: ghcr.io/sharkusmanch/autoshift:latest
     container_name: autoshift_all
     restart: always
     volumes:

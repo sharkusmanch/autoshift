@@ -1,9 +1,9 @@
-name: AutoSHIFt Redeem Codes
+name: AutoSHIFt Redeem Codes (DISABLED)
 
 on:
-  schedule:
+  # schedule:
     # 10am and 10pm Pacific Time (PST/PDT)
-    - cron: '0 17,5 * * *'
+    # - cron: '0 17,5 * * *'
   workflow_dispatch:
 
 jobs:
